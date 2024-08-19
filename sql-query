@@ -1,0 +1,82 @@
+
+// Вариант 1,вопрос 1
+
+WITH top_blocks AS (
+    SELECT block_height
+    FROM test_txs
+    GROUP BY block_height
+    ORDER BY block_height DESC
+    LIMIT $1
+)
+SELECT *
+FROM test_txs
+WHERE block_height IN (SELECT block_height FROM top_blocks)
+ORDER BY block_height DESC;
+
+/// WITH top_blocks - для определения самых высоких блоков, затем выбираем все транзакции, где block_height соответствует значениям
+
+
+// Вариант 2, вопрос 1
+
+SELECT *
+FROM test_txs
+WHERE block_height IN (
+    SELECT DISTINCT block_height
+    FROM test_txs
+    ORDER BY block_height DESC
+    LIMIT $1
+)
+ORDER BY block_height DESC;
+
+
+
+// Вариант 1, вопрос 2
+
+WITH cumulative_gas AS (
+    SELECT
+        date_trunc('day', timestamp) AS day,
+        SUM(gas) OVER (ORDER BY date_trunc('day', timestamp)) AS cumulative_gas
+    FROM test_txs
+)
+SELECT
+    day,
+    COALESCE(cumulative_gas, LAG(cumulative_gas) OVER (ORDER BY day)) AS cumulative_gas
+FROM (
+    SELECT day::date
+    FROM generate_series(
+        (SELECT MIN(date_trunc('day', timestamp)) FROM test_txs),
+        (SELECT MAX(date_trunc('day', timestamp)) FROM test_txs),
+        '1 day'::interval
+    ) day
+) days
+LEFT JOIN cumulative_gas ON days.day = cumulative_gas.day
+ORDER BY day;
+
+/// Используем cumulative_gas для расчета накопительной суммы газа на каждый день, где имеются транзакции,
+используем COALESCE и LAG для заполнения пропущенных дней последним доступным значением.
+
+// Вариант 2, вопрос 2
+
+WITH cumulative_gas AS (
+    SELECT
+        date_trunc('day', transaction_time) AS transaction_date,
+        SUM(gas_used) AS daily_gas
+    FROM test_txs
+    WHERE transaction_time BETWEEN '2024-08-01' AND '2024-08-05'
+    GROUP BY transaction_date
+),
+all_dates AS (
+    SELECT generate_series(
+        (SELECT MIN(transaction_date) FROM cumulative_gas),
+        (SELECT MAX(transaction_date) FROM cumulative_gas),
+        '1 day'::interval
+    ) AS date
+)
+SELECT
+    ad.date,
+    COALESCE(SUM(cg.daily_gas) OVER (ORDER BY ad.date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 0) AS cumulative_gas
+FROM all_dates ad
+LEFT JOIN cumulative_gas cg ON ad.date = cg.transaction_date
+ORDER BY ad.date;
+
+
